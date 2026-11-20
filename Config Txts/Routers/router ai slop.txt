@@ -1,0 +1,27 @@
+Ik heb voor elke router een configuratiebestand gemaakt (R-ELB-01 t/m R-DRT-01). Ze volgen dezelfde IP-tekening als de L3-switches, dus de adressen en routes sluiten op elkaar aan. Vervang wel eerst <WACHTWOORD> en plak per blok, net als bij de switches.
+
+Welke poort is welke op een ISR 4321
+
+ge0 = Gi0/0/0 en ge1 = Gi0/0/1: de gewone routerpoorten, het IP staat direct op de poort.
+ge2 = Gi0/1/0 en ge3 = Gi0/1/1: poorten op de NIM-ES2-4. Dat zijn switchpoorten, dus het IP staat op een VLAN-interface (Vlan121/122 in Elburg, Vlan101 tussen Nunspeet en Dronten).
+
+Sluit de kabels aan volgens jullie patchplan. Als een kabel in een andere poort zit, verander dan de interfacenaam in de config.
+
+Snel controleren na het plakken
+
+show ip interface brief
+show ip route static
+
+Nu al pingen kan bijvoorbeeld zo:
+
+R-NSP-01 → ping 192.168.0.33 (SW1)
+R-NSP-01 → ping 192.168.0.66 (R4)
+R-ELB-01 → ping 192.168.0.2 (SW1)
+
+Om rekening mee te houden
+
+FW-ELB-02: jullie hardwarelijst noemt één Netgate, maar de tekening heeft er twee. Is er geen tweede firewall, dan blijft Vlan121 (ge2) op R1 en R2 gewoon down. De backup-routes daarheen worden dan niet gebruikt, en dat kan geen kwaad.
+DHCP: de ip helper-address-regels naar 10.1.1.10/.11 werken pas als de firewalls en de IPsec-tunnel naar de cloud draaien.
+Statisch, geen OSPF: de opdracht vraagt statische routering, het nummerplan noemt OSPF. Die keuze staat nog open bij jullie docent.
+
+Zal ik hierna ook de configuraties voor de vier CBS350’s maken?

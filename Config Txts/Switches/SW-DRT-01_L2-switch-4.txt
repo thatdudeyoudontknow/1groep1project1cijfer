@@ -1,0 +1,64 @@
+! =====================================================================
+! SW-DRT-01 - L2 switch 4 (CBS350-8T-E-2G) - Dronten
+! gi1 trunk 30,31 <- R-DRT-01 Gi0/0/1 · gi2 trunk native 31 -> AP-DRT-01
+! gi3 access 31 -> tafel 6b6
+! Plak per blok in "configure terminal"
+! =====================================================================
+
+! ---------- 1. Basis ----------
+hostname SW-DRT-01
+username admin password <WACHTWOORD> privilege 15
+
+! ---------- 2. VLANs ----------
+vlan database
+vlan 30,31,999
+exit
+interface vlan 30
+ name Studenten-Gasten
+interface vlan 31
+ name Medewerkers
+interface vlan 999
+ name Ongebruikt
+exit
+
+! ---------- 3. Poorten ----------
+interface GigabitEthernet1
+ description Trunk naar R-DRT-01 Gi0/0/1
+ switchport mode trunk
+ switchport trunk allowed vlan none
+ switchport trunk allowed vlan add 30,31
+ no shutdown
+interface GigabitEthernet2
+ description Trunk naar AP-DRT-01 (native 31, via PoE-injector)
+ switchport mode trunk
+ switchport trunk native vlan 31
+ switchport trunk allowed vlan none
+ switchport trunk allowed vlan add 30,31
+ spanning-tree portfast
+ no shutdown
+interface GigabitEthernet3
+ description Access VLAN 31 -> K1P2-6 -> tafel 6b6
+ switchport mode access
+ switchport access vlan 31
+ spanning-tree portfast
+ no shutdown
+interface range GigabitEthernet4-10
+ description Ongebruikt
+ switchport mode access
+ switchport access vlan 999
+ shutdown
+exit
+
+! ---------- 4. Beheeradres ----------
+interface vlan 1
+ no ip address dhcp
+interface vlan 31
+ ip address 10.3.1.254 255.255.255.0
+exit
+ip default-gateway 10.3.1.1
+
+! ---------- 5. Beheer (SSH) ----------
+ip ssh server
+no ip telnet server
+end
+write memory

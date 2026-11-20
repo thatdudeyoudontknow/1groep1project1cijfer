@@ -1,0 +1,55 @@
+! =====================================================================
+! SW-NSP-01 - L2 switch 3 (CBS350-8T-E-2G) - Nunspeet
+! gi1 trunk 20,21 <- R-NSP-01 Gi0/0/1 · gi2 access 20 -> tafel 6b5
+! Plak per blok in "configure terminal"
+! =====================================================================
+
+! ---------- 1. Basis ----------
+hostname SW-NSP-01
+username admin password Waarisjos! privilege 15
+
+! ---------- 2. VLANs ----------
+vlan database
+vlan 20,21,999
+exit
+interface vlan 20
+ name Studenten
+interface vlan 21
+ name Medewerkers
+interface vlan 999
+ name Ongebruikt
+exit
+
+! ---------- 3. Poorten ----------
+interface GigabitEthernet1
+ description "Trunk naar R-NSP-01 Gi0/0/1"
+ switchport mode trunk
+ switchport trunk allowed vlan none
+ switchport trunk allowed vlan add 20,21
+ no shutdown
+interface GigabitEthernet2
+ description "Access VLAN 20 -> K1P2-5 -> tafel 6b5"
+ switchport mode access
+ switchport access vlan 20
+ spanning-tree portfast
+ no shutdown
+interface range GigabitEthernet3-10
+ description Ongebruikt
+ switchport mode access
+ switchport access vlan 999
+ shutdown
+exit
+
+! ---------- 4. Beheeradres ----------
+interface vlan 1
+ no ip address dhcp
+interface vlan 21
+ ip address 10.2.1.254 255.255.255.0
+exit
+ip default-gateway 10.2.1.1
+
+! ---------- 5. Beheer (SSH) ----------
+ip ssh server
+no ip telnet server
+end
+write memory

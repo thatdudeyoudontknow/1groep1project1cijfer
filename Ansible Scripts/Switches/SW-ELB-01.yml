@@ -1,0 +1,207 @@
+---
+- name: Verbindingsgegevens instellen voor SW-ELB-01
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars:
+    enable_secret: "<wachtwoord>"
+    admin_secret: "<wachtwoord>"
+  tasks:
+    - ansible.builtin.add_host:
+        name: SW-ELB-01
+        ansible_host: 10.0.0.2
+        ansible_connection: ansible.netcommon.network_cli
+        ansible_network_os: cisco.ios.ios
+        ansible_user: admin
+        ansible_password: "{{ admin_secret }}"
+        ansible_become: yes
+        ansible_become_method: enable
+        ansible_become_password: "{{ enable_secret }}"
+        switch_enable_secret: "{{ enable_secret }}"
+        switch_admin_secret: "{{ admin_secret }}"
+
+- name: Configureer SW-ELB-01 (Catalyst 3650 - Core Elburg Active)
+  hosts: SW-ELB-01
+  gather_facts: no
+  tasks:
+    - name: 1. Basisconfiguratie
+      cisco.ios.ios_config:
+        lines:
+          - hostname SW-ELB-01
+          - no ip domain-lookup
+          - ip domain-name heh.local
+          - enable secret {{ switch_enable_secret }}
+          - username admin privilege 15 secret {{ switch_admin_secret }}
+          - service password-encryption
+          - ip routing
+
+    - name: 2. VLANs aanmaken en benoemen
+      cisco.ios.ios_config:
+        lines:
+          - name {{ item.name }}
+        parents: vlan {{ item.id }}
+      loop:
+        - { id: 10, name: "Netwerkbeheer" }
+        - { id: 11, name: "Medewerkers" }
+        - { id: 12, name: "Studenten" }
+        - { id: 13, name: "WiFi-BYOD" }
+        - { id: 99, name: "Core-interlink" }
+        - { id: 999, name: "Ongebruikt" }
+        - { id: 1101, name: "Proxmox_Uplink" }
+
+    - name: 3. Spanning Tree (MST) instellen
+      cisco.ios.ios_config:
+        lines:
+          - spanning-tree mode mst
+          - spanning-tree mst 0-1 priority 4096
+
+    - name: 3b. MST-regio configureren
+      cisco.ios.ios_config:
+        lines:
+          - name HEH
+          - revision 1
+          - instance 1 vlan 10-13,99
+        parents: spanning-tree mst configuration
+
+    - name: 4. Routed poorten naar routers configureren
+      cisco.ios.ios_config:
+        lines:
+          - description {{ item.desc }}
+          - no switchport
+          - ip address {{ item.ip }} {{ item.mask }}
+          - no shutdown
+        parents: interface {{ item.intf }}
+      loop:
+        - { intf: "GigabitEthernet1/0/1", desc: "R-ELB-01 ge1 (Router 1)", ip: "192.168.0.2", mask: "255.255.255.252" }
+        - { intf: "GigabitEthernet1/0/2", desc: "R-ELB-02 ge1 (Router 2)", ip: "192.168.0.6", mask: "255.255.255.252" }
+        - { intf: "GigabitEthernet1/0/5", desc: "WAN VLAN100 naar R-NSP-01 ge0 (Router 3)", ip: "192.168.0.33", mask: "255.255.255.240" }
+
+    - name: 5. Trunks en accesspoorten configureren
+      cisco.ios.ios_config:
+        lines: "{{ item.lines }}"
+        parents: interface {{ item.intf }}
+      loop:
+        - intf: "GigabitEthernet1/0/3"
+          lines:
+            - description Trunk naar SW-BG1-01 (L2 switch 1)
+            - switchport mode trunk
+            - switchport trunk allowed vlan 10-13
+            - no shutdown
+        - intf: "GigabitEthernet1/0/4"
+          lines:
+            - description Trunk naar SW-BG2-01 (L2 switch 2)
+            - switchport mode trunk
+            - switchport trunk allowed vlan 10-13
+            - no shutdown
+        - intf: "GigabitEthernet1/0/6"
+          lines:
+            - description Trunk naar AP-ELB-01 (native 10)
+            - switchport mode trunk
+            - switchport trunk native vlan 10
+            - switchport trunk allowed vlan 10,11,13
+            - spanning-tree portfast trunk
+            - no shutdown
+        - intf: "GigabitEthernet1/0/7"
+          lines:
+            - description Access VLAN 11 -> K1P2-1 -> tafel 6b1
+            - switchport mode access
+            - switchport access vlan 11
+            - spanning-tree portfast
+            - no shutdown
+        - intf: "GigabitEthernet1/0/8"
+          lines:
+            - description Interlink naar SW-ELB-02 Gi1/0/7
+            - switchport mode trunk
+            - switchport trunk allowed vlan 10-13,99,1101
+            - no shutdown
+        - intf: "GigabitEthernet1/0/9"
+          lines:
+            - switchport mode trunk
+            - switchport trunk allowed vlan 1101-1150
+            - no shutdown
+
+    - name: 6. Ongebruikte poorten uitschakelen
+      cisco.ios.ios_config:
+        lines:
+          - switchport mode access
+          - switchport access vlan 999
+          - shutdown
+        parents: interface range GigabitEthernet1/0/10 - 24 , GigabitEthernet1/1/1 - 4
+
+    - name: 7. SVI's + HSRP (Active) configureren
+      cisco.ios.ios_config:
+        lines:
+          - description {{ item.desc }}
+          - ip address {{ item.ip }} {{ item.mask }}
+          - standby version 2
+          - standby {{ item.id }} ip {{ item.vip }}
+          - standby {{ item.id }} priority 110
+          - standby {{ item.id }} preempt
+          - ip helper-address 10.1.1.10
+          - ip helper-address 10.1.1.11
+          - no shutdown
+        parents: interface Vlan{{ item.id }}
+      loop:
+        - { id: 10, desc: "Netwerkbeheer", ip: "10.0.0.2", mask: "255.255.255.0", vip: "10.0.0.1" }
+        - { id: 11, desc: "Medewerkers", ip: "10.1.0.2", mask: "255.255.255.0", vip: "10.1.0.1" }
+        - { id: 12, desc: "Studenten", ip: "10.1.2.2", mask: "255.255.255.0", vip: "10.1.2.1" }
+        - { id: 13, desc: "WiFi-BYOD", ip: "10.0.128.2", mask: "255.255.252.0", vip: "10.0.128.1" }
+
+    - name: 7b. SVI Vlan99 (Core-interlink) configureren
+      cisco.ios.ios_config:
+        lines:
+          - description Core-interlink naar SW-ELB-02
+          - ip address 192.168.0.17 255.255.255.248
+          - no shutdown
+        parents: interface Vlan99
+
+    - name: 7c. SVI Vlan1101 (Proxmox_Uplink) configureren
+      cisco.ios.ios_config:
+        lines:
+          - ip address 10.110.1.2 255.255.255.0
+          - standby 11 ip 10.110.1.1
+          - no shutdown
+        parents: interface Vlan1101
+
+    - name: 8. IP SLA 1 configureren
+      cisco.ios.ios_config:
+        lines:
+          - icmp-echo 192.168.0.130 source-ip 192.168.0.17
+          - frequency 5
+        parents: ip sla 1
+
+    - name: 8b. IP SLA schedule, track en statische routes instellen
+      cisco.ios.ios_config:
+        lines:
+          - ip sla schedule 1 life forever start-time now
+          - track 1 ip sla 1 reachability
+          - ip route 0.0.0.0 0.0.0.0 192.168.0.1
+          - ip route 0.0.0.0 0.0.0.0 192.168.0.5 10
+          - ip route 10.2.0.0 255.255.0.0 192.168.0.34
+          - ip route 10.2.0.0 255.255.0.0 192.168.0.18 10
+          - ip route 10.3.0.0 255.255.0.0 192.168.0.18 track 1
+          - ip route 10.3.0.0 255.255.0.0 192.168.0.34 10
+          - ip route 192.168.0.64 255.255.255.240 192.168.0.34
+          - ip route 192.168.0.64 255.255.255.240 192.168.0.18 10
+          - ip route 192.168.0.128 255.255.255.240 192.168.0.18
+
+    - name: 9. Beheer (SSH en lines) configureren
+      cisco.ios.ios_config:
+        lines:
+          - crypto key generate rsa modulus 2048
+          - ip ssh version 2
+
+    - name: 9b. Console line configureren
+      cisco.ios.ios_config:
+        lines:
+          - logging synchronous
+          - login local
+        parents: line con 0
+
+    - name: 9c. VTY lines configureren en opslaan
+      cisco.ios.ios_config:
+        lines:
+          - login local
+          - transport input ssh
+        parents: line vty 0 15
+        save_when: modified

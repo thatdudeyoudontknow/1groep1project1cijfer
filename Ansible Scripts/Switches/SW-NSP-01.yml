@@ -1,0 +1,134 @@
+---
+# Zelfstandig playbook voor SW-NSP-01; geen aanvullende bestanden nodig.
+# Uitvoeren: ansible-playbook SW-NSP-01.yml
+# Benodigd: ansible-core >= 2.18 en de gebruikte netwerkcollecties.
+- name: Verbinding met SW-NSP-01 instellen
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags:
+  - verbinding
+  vars:
+    switch_ip: 10.2.1.254
+    switch_gebruiker: admin
+  vars_prompt:
+  - name: ssh_wachtwoord
+    prompt: Huidig SSH-wachtwoord (<wachtwoord>)
+    private: true
+  - name: switch_wachtwoord
+    prompt: Configuratiewachtwoord (vervanger van <wachtwoord> in de commands)
+    private: true
+  tasks:
+  - name: Controleer de benodigde Ansible-versie
+    ansible.builtin.assert:
+      that:
+      - ansible_version.full is version('2.18', '>=')
+      fail_msg: Installeer ansible-core 2.18 of nieuwer.
+      quiet: true
+  - name: Controleer dat het configuratiewachtwoord een geldig CLI-argument is
+    ansible.builtin.assert:
+      that:
+      - switch_wachtwoord | length > 0
+      - (switch_wachtwoord | regex_search('\s')) is none
+      fail_msg: Gebruik een niet-leeg wachtwoord zonder spaties of regeleinden.
+      quiet: true
+    no_log: true
+  - name: Registreer deze switch voor de volgende play
+    ansible.builtin.add_host:
+      name: SW-NSP-01
+      ansible_host: '{{ switch_ip }}'
+      ansible_user: '{{ switch_gebruiker }}'
+      ansible_password: '{{ ssh_wachtwoord }}'
+      ansible_connection: ansible.netcommon.network_cli
+      ansible_network_os: community.ciscosmb.ciscosmb
+      ansible_network_cli_ssh_type: paramiko
+      ansible_command_timeout: 120
+      ansible_become: false
+      switch_wachtwoord: '{{ switch_wachtwoord }}'
+    no_log: true
+- name: Oorspronkelijke configuratie van SW-NSP-01 automatiseren
+  hosts: SW-NSP-01
+  gather_facts: false
+  tags:
+  - configuratie
+  vars:
+    switch_commands: |
+      configure terminal
+      ! =====================================================================
+      ! SW-NSP-01 - L2 switch 3 (CBS350-8T-E-2G) - Nunspeet
+      ! gi1 trunk 20,21 <- R-NSP-01 Gi0/0/1 · gi2 access 20 -> tafel 6b5
+      ! Plak per blok in "configure terminal"
+      ! =====================================================================
+
+      ! ---------- 1. Basis ----------
+      hostname SW-NSP-01
+      username admin password {{ switch_wachtwoord }} privilege 15
+
+      ! ---------- 2. VLANs ----------
+      vlan database
+      vlan 20,21,999
+      exit
+      interface vlan 20
+       name Studenten
+      interface vlan 21
+       name Medewerkers
+      interface vlan 999
+       name Ongebruikt
+      exit
+
+      ! ---------- 3. Poorten ----------
+      interface GigabitEthernet1
+       description "Trunk naar R-NSP-01 Gi0/0/1"
+       switchport mode trunk
+       switchport trunk allowed vlan none
+       switchport trunk allowed vlan add 20,21
+       no shutdown
+      interface GigabitEthernet2
+       description "Access VLAN 20 -> K1P2-5 -> tafel 6b5"
+       switchport mode access
+       switchport access vlan 20
+       spanning-tree portfast
+       no shutdown
+      interface range GigabitEthernet3-10
+       description Ongebruikt
+       switchport mode access
+       switchport access vlan 999
+       shutdown
+      exit
+
+      ! ---------- 4. Beheeradres ----------
+      interface vlan 1
+       no ip address dhcp
+      interface vlan 21
+       ip address 10.2.1.254 255.255.255.0
+      exit
+      ip default-gateway 10.2.1.1
+
+      ! ---------- 5. Beheer (SSH) ----------
+      ip ssh server
+      no ip telnet server
+      end
+      write memory
+  tasks:
+  - name: Voer alle oorspronkelijke commands in volgorde uit
+    ansible.netcommon.cli_command:
+      command: '{{ switch_command }}'
+      prompt: '{{ [''(?i)Do you really want to replace them\?\s*\[yes/no\]:?''] if switch_command == ''crypto key
+        generate rsa modulus 2048'' else omit }}'
+      answer: '{{ [''no''] if switch_command == ''crypto key generate rsa modulus 2048'' else omit }}'
+    register: switch_command_result
+    changed_when: switch_command not in ['configure terminal', 'end', 'exit']
+    failed_when: "(switch_command_result is failed) or ((switch_command_result.stdout | default('') |\n  regex_search('(?im)^\\\
+      \\s*(?:%\\\\s*(?:Invalid|Incomplete|Ambiguous|Error|Bad|Unrecognized|Unknown|Entry already running)|Invalid\
+      \ input|Unrecognized command|Unknown command|Error(?:\\\\s|:)|Cannot modify|Entry already running)')) is not\
+      \ none)"
+    no_log: '{{ (switch_command | regex_search(''^(?:enable secret |username .* (?:secret|password) )'')) is not
+      none }}'
+    loop: '{{ switch_commands.splitlines() | map(''trim'') | reject(''equalto'', '''') | reject(''match'', ''^!'')
+      | list }}'
+    loop_control:
+      loop_var: switch_command
+      label: '{{ ''<wachtwoordcommand afgeschermd>'' if (switch_command | regex_search(''^(?:enable secret |username
+        .* (?:secret|password) )'')) is not none else switch_command }}'
+      break_when:
+      - switch_command_result is failed or switch_command_result is unreachable

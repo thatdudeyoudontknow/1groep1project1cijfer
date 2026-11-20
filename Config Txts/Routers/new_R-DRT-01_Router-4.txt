@@ -1,0 +1,115 @@
+! =====================================================================
+! R-DRT-01 - Router 4 (ISR 4321 + NIM-ES2-4) - Dronten
+! Alle links op de NIM-ES2-4 (switchpoorten) -> IP staat op de SVI
+!   Gi0/1/0  VLAN 102 access -> SW-ELB-02 Gi1/0/5  192.168.0.130/28 (SW 192.168.0.129)
+!   Gi0/1/1  trunk 30,31     -> SW-DRT-01 gi1      SVI Vlan30 / Vlan31 (gateways)
+!   Gi0/1/2  VLAN 101 access -> R-NSP-01 Gi0/1/2   192.168.0.66/28  (R3 192.168.0.65)
+!   Console  -> TC ge4
+! Router-on-a-stick met sub-interfaces kan NIET op NIM-switchpoorten,
+! daarom zijn de gateways voor VLAN 30/31 SVI's.
+! Plak per blok in "configure terminal"
+! =====================================================================
+
+! ---------- 0. (Optioneel) Volledig wissen vóór herinstallatie ----------
+! In privileged EXEC (niet in configure terminal):
+!   write erase
+!   delete /force flash:vlan.dat      (alleen als dit bestand bestaat)
+!   reload                            (bij "save?" -> no)
+! Sla daarna de initial configuration dialog over (no).
+
+! ---------- 1. Basis ----------
+hostname R-DRT-01
+no ip domain-lookup
+ip domain-name heh.local
+enable secret <WACHTWOORD>
+username admin privilege 15 secret <WACHTWOORD>
+service password-encryption
+
+! ---------- 2. Ingebouwde poorten: niet in gebruik ----------
+interface GigabitEthernet0/0/0
+ description Ongebruikt (alle links zitten op de NIM)
+ shutdown
+interface GigabitEthernet0/0/1
+ description Ongebruikt (alle links zitten op de NIM)
+ shutdown
+exit
+
+! ---------- 3. VLANs ----------
+vlan 30
+ name Studenten-Gasten
+vlan 31
+ name Medewerkers
+vlan 101
+ name WAN-NSP-DRT
+vlan 102
+ name WAN-ELB-DRT
+exit
+
+! ---------- 4. NIM-poorten ----------
+interface GigabitEthernet0/1/0
+ description ge0/1/0 - WAN VLAN102 naar SW-ELB-02 Gi1/0/5
+ switchport mode access
+ switchport access vlan 102
+ spanning-tree portfast
+ no shutdown
+interface GigabitEthernet0/1/1
+ description ge0/1/1 - trunk naar SW-DRT-01 gi1
+ switchport mode trunk
+ switchport trunk allowed vlan 30,31
+ no shutdown
+interface GigabitEthernet0/1/2
+ description ge0/1/2 - WAN VLAN101 naar R-NSP-01 Gi0/1/2
+ switchport mode access
+ switchport access vlan 101
+ no shutdown
+interface GigabitEthernet0/1/3
+ description Ongebruikt
+ shutdown
+exit
+
+! ---------- 5. SVI's ----------
+interface Vlan1
+ shutdown
+interface Vlan30
+ description VLAN 30 Studenten/gasten (gateway)
+ ip address 10.3.0.1 255.255.255.0
+ ip helper-address 10.1.1.10
+ ip helper-address 10.1.1.11
+ no shutdown
+interface Vlan31
+ description VLAN 31 Medewerkers (gateway)
+ ip address 10.3.1.1 255.255.255.0
+ ip helper-address 10.1.1.10
+ ip helper-address 10.1.1.11
+ no shutdown
+interface Vlan101
+ description WAN Nunspeet - Dronten
+ ip address 192.168.0.66 255.255.255.240
+ no shutdown
+interface Vlan102
+ description WAN Elburg - Dronten
+ ip address 192.168.0.130 255.255.255.240
+ no shutdown
+exit
+
+! ---------- 6. Statische routes (exit-interface + next-hop) ----------
+! Alles naar Elburg, backup via Nunspeet
+ip route 0.0.0.0 0.0.0.0 Vlan102 192.168.0.129
+ip route 0.0.0.0 0.0.0.0 Vlan101 192.168.0.65 10
+! Nunspeet direct, backup via Elburg
+ip route 10.2.0.0 255.255.0.0 Vlan101 192.168.0.65
+ip route 10.2.0.0 255.255.0.0 Vlan102 192.168.0.129 10
+
+! ---------- Beheer (SSH) ----------
+crypto key generate rsa modulus 2048
+ip ssh version 2
+line con 0
+ exec-timeout 10 0
+ logging synchronous
+ login local
+line vty 0 4
+ exec-timeout 10 0
+ login local
+ transport input ssh
+end
+write memory
