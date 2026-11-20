@@ -1,15 +1,15 @@
 ---
-# Zelfstandig playbook voor SW-ELB-01; geen aanvullende bestanden nodig.
-# Uitvoeren: ansible-playbook SW-ELB-01.yml
+# Zelfstandig playbook voor SW-BG1-01; geen aanvullende bestanden nodig.
+# Uitvoeren: ansible-playbook SW-BG1-01.yml
 # Benodigd: ansible-core >= 2.18 en de gebruikte netwerkcollecties.
-- name: Verbinding met SW-ELB-01 instellen
+- name: Verbinding met SW-BG1-01 instellen
   hosts: localhost
   connection: local
   gather_facts: false
   tags:
   - verbinding
   vars:
-    switch_ip: 10.0.0.2
+    switch_ip: 10.0.0.4
     switch_gebruiker: admin
   vars_prompt:
   - name: ssh_wachtwoord
@@ -17,9 +17,6 @@
     private: true
   - name: switch_wachtwoord
     prompt: Configuratiewachtwoord (vervanger van <wachtwoord> in de commands)
-    private: true
-  - name: enable_wachtwoord
-    prompt: Huidig enable-wachtwoord (<wachtwoord>)
     private: true
   tasks:
   - name: Controleer de benodigde Ansible-versie
@@ -38,21 +35,19 @@
     no_log: true
   - name: Registreer deze switch voor de volgende play
     ansible.builtin.add_host:
-      name: SW-ELB-01
+      name: SW-BG1-01
       ansible_host: '{{ switch_ip }}'
       ansible_user: '{{ switch_gebruiker }}'
       ansible_password: '{{ ssh_wachtwoord }}'
       ansible_connection: ansible.netcommon.network_cli
-      ansible_network_os: cisco.ios.ios
+      ansible_network_os: community.ciscosmb.ciscosmb
       ansible_network_cli_ssh_type: paramiko
       ansible_command_timeout: 120
-      ansible_become: true
-      ansible_become_method: enable
+      ansible_become: false
       switch_wachtwoord: '{{ switch_wachtwoord }}'
-      ansible_become_password: '{{ enable_wachtwoord }}'
     no_log: true
-- name: Oorspronkelijke configuratie van SW-ELB-01 automatiseren
-  hosts: SW-ELB-01
+- name: Oorspronkelijke configuratie van SW-BG1-01 automatiseren
+  hosts: SW-BG1-01
   gather_facts: false
   tags:
   - configuratie
@@ -60,183 +55,76 @@
     switch_commands: |
       configure terminal
       ! =====================================================================
-      ! SW-ELB-01 - L3 switch 1 (Catalyst 3650) - core Elburg
-      ! MST primair - HSRP active - routes to Nunspeet (R3)
-      ! Paste per block in "configure terminal". Port geX = Gi1/0/X
+      ! SW-BG1-01 - L2 switch 1 (CBS350-8T-E-2G) - Bijgebouw 1
+      ! gi1 trunk <- SW-ELB-01 Gi1/0/3 · gi2 trunk <- SW-ELB-02 Gi1/0/3 · gi3 access 11
+      ! Plak per blok in "configure terminal"
       ! =====================================================================
 
       ! ---------- 1. Basis ----------
-      hostname SW-ELB-01
-      no ip domain-lookup
-      ip domain-name heh.local
-      enable secret {{ switch_wachtwoord }}
-      username admin privilege 15 secret {{ switch_wachtwoord }}
-      service password-encryption
-      ip routing
+      hostname SW-BG1-01
+      username admin password {{ switch_wachtwoord }} privilege 15
 
       ! ---------- 2. VLANs ----------
-      vlan 10
+      vlan database
+      vlan 10-13,999
+      exit
+      interface vlan 10
        name Netwerkbeheer
-      vlan 11
+      interface vlan 11
        name Medewerkers
-      vlan 12
+      interface vlan 12
        name Studenten
-      vlan 13
+      interface vlan 13
        name WiFi-BYOD
-      vlan 99
-       name Core-interlink
-      vlan 999
+      interface vlan 999
        name Ongebruikt
-      vlan 1101
-       name Proxmox_Uplink
       exit
 
-      ! ---------- 3. Spanning tree (MST, moet gelijk zijn op SW2 en de CBS350's) ----------
+      ! ---------- 3. Spanning tree (zelfde MST-regio als de 3650's) ----------
       spanning-tree mode mst
       spanning-tree mst configuration
        name HEH
        revision 1
        instance 1 vlan 10-13,99
       exit
-      spanning-tree mst 0-1 priority 4096
 
-      ! ---------- 4. Routed poorten (naar routers) ----------
-      interface GigabitEthernet1/0/1
-       description R-ELB-01 ge1 (Router 1)
-       no switchport
-       ip address 192.168.0.2 255.255.255.252
-       no shutdown
-      interface GigabitEthernet1/0/2
-       description R-ELB-02 ge1 (Router 2)
-       no switchport
-       ip address 192.168.0.6 255.255.255.252
-       no shutdown
-      interface GigabitEthernet1/0/5
-       description WAN VLAN100 naar R-NSP-01 ge0 (Router 3)
-       no switchport
-       ip address 192.168.0.33 255.255.255.240
-       no shutdown
-
-      ! ---------- 5. Trunks en access ----------
-      interface GigabitEthernet1/0/3
-       description Trunk naar SW-BG1-01 (L2 switch 1)
+      ! ---------- 4. Poorten ----------
+      interface GigabitEthernet1
+       description "Trunk naar SW-ELB-01 Gi1/0/3"
        switchport mode trunk
-       switchport trunk allowed vlan 10-13
+       switchport trunk allowed vlan none
+       switchport trunk allowed vlan add 10-13
        no shutdown
-      interface GigabitEthernet1/0/4
-       description Trunk naar SW-BG2-01 (L2 switch 2)
+      interface GigabitEthernet2
+       description "Trunk naar SW-ELB-02 Gi1/0/3"
        switchport mode trunk
-       switchport trunk allowed vlan 10-13
+       switchport trunk allowed vlan none
+       switchport trunk allowed vlan add 10-13
        no shutdown
-      interface GigabitEthernet1/0/6
-       description Trunk naar AP-ELB-01 (native 10)
-       switchport mode trunk
-       switchport trunk native vlan 10
-       switchport trunk allowed vlan 10,11,13
-       spanning-tree portfast trunk
-       no shutdown
-      interface GigabitEthernet1/0/7
-       description Access VLAN 11 -> K1P2-1 -> tafel 6b1
+      interface GigabitEthernet3
+       description "Access VLAN 11 -> K1P2-3 -> tafel 6b3"
        switchport mode access
        switchport access vlan 11
        spanning-tree portfast
        no shutdown
-      interface GigabitEthernet1/0/8
-       description Interlink naar SW-ELB-02 Gi1/0/7
-       switchport mode trunk
-       switchport trunk allowed vlan 10-13,99,1101
-       no shutdown
-      interface GigabitEthernet1/0/9
-       switchport mode trunk
-       switchport trunk allowed vlan 1101-1150
-       no shutdown
-
-      ! ---------- 6. Ongebruikte poorten ----------
-      interface range GigabitEthernet1/0/10 - 24 , GigabitEthernet1/1/1 - 4
+      interface range GigabitEthernet4-10
+       description Ongebruikt
        switchport mode access
        switchport access vlan 999
        shutdown
       exit
 
-      ! ---------- 7. SVI's + HSRP (SW1 = active, priority 110) ----------
-      interface Vlan10
-       description Netwerkbeheer
-       ip address 10.0.0.2 255.255.255.0
-       standby version 2
-       standby 10 ip 10.0.0.1
-       standby 10 priority 110
-       standby 10 preempt
-       ip helper-address 10.1.1.10
-       ip helper-address 10.1.1.11
-       no shutdown
-      interface Vlan11
-       description Medewerkers
-       ip address 10.1.0.2 255.255.255.0
-       standby version 2
-       standby 11 ip 10.1.0.1
-       standby 11 priority 110
-       standby 11 preempt
-       ip helper-address 10.1.1.10
-       ip helper-address 10.1.1.11
-       no shutdown
-      interface Vlan12
-       description Studenten
-       ip address 10.1.2.2 255.255.255.0
-       standby version 2
-       standby 12 ip 10.1.2.1
-       standby 12 priority 110
-       standby 12 preempt
-       ip helper-address 10.1.1.10
-       ip helper-address 10.1.1.11
-       no shutdown
-      interface Vlan13
-       description WiFi-BYOD
-       ip address 10.0.128.2 255.255.252.0
-       standby version 2
-       standby 13 ip 10.0.128.1
-       standby 13 priority 110
-       standby 13 preempt
-       ip helper-address 10.1.1.10
-       ip helper-address 10.1.1.11
-       no shutdown
-      interface Vlan99
-       description Core-interlink naar SW-ELB-02
-       ip address 192.168.0.17 255.255.255.248
-       no shutdown
-      interface Vlan1101
-       ip address 10.110.1.2 255.255.255.0
-       standby 11 ip 10.110.1.1
-       no shutdown
+      ! ---------- 5. Beheeradres ----------
+      interface vlan 1
+       no ip address dhcp
+      interface vlan 10
+       ip address 10.0.0.4 255.255.255.0
       exit
+      ip default-gateway 10.0.0.1
 
-      ! ---------- 8. Statische routes + IP SLA ----------
-      ip sla 1
-       icmp-echo 192.168.0.130 source-ip 192.168.0.17
-       frequency 5
-      exit
-      ip sla schedule 1 life forever start-time now
-      track 1 ip sla 1 reachability
-      exit
-
-      ip route 0.0.0.0 0.0.0.0 192.168.0.1
-      ip route 0.0.0.0 0.0.0.0 192.168.0.5 10
-      ip route 10.2.0.0 255.255.0.0 192.168.0.34
-      ip route 10.2.0.0 255.255.0.0 192.168.0.18 10
-      ip route 10.3.0.0 255.255.0.0 192.168.0.18 track 1
-      ip route 10.3.0.0 255.255.0.0 192.168.0.34 10
-      ip route 192.168.0.64 255.255.255.240 192.168.0.34
-      ip route 192.168.0.64 255.255.255.240 192.168.0.18 10
-      ip route 192.168.0.128 255.255.255.240 192.168.0.18
-
-      ! ---------- 9. Beheer (SSH) ----------
-      crypto key generate rsa modulus 2048
-      ip ssh version 2
-      line con 0
-       logging synchronous
-       login local
-      line vty 0 15
-       login local
-       transport input ssh
+      ! ---------- 6. Beheer (SSH) ----------
+      ip ssh server
+      no ip telnet server
       end
       write memory
   tasks:
